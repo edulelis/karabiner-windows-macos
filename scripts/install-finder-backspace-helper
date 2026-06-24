@@ -1,0 +1,17 @@
+#!/bin/zsh
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+helper_source="$repo_root/helpers/finder_backspace.swift"
+helper_bin="$HOME/.config/karabiner/bin/finder_backspace"
+
+mkdir -p "$(dirname "$helper_bin")"
+
+swiftc -O "$helper_source" -o "$helper_bin"
+codesign --force --sign - "$helper_bin" >/dev/null
+
+echo "Installed $helper_bin"
+echo "Requesting Accessibility permission for Finder Backspace helper..."
+"$helper_bin" --prompt || true
+
+open 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'
