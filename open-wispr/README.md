@@ -16,6 +16,25 @@ Apple's built-in dictation with a Control-key gesture.
   swallow keystrokes).
 - Everything runs on-device. No audio ever leaves the machine.
 
+## Accuracy
+
+Why this replaces Apple Dictation:
+
+- Whisper large-v3 is near state-of-the-art ASR: **~1.8% word error rate** on
+  LibriSpeech test-clean (OpenAI large-v3 release, Nov 2023) and **7.44% mean
+  WER** across the harder, conversational suite of the
+  [HF Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard).
+- This setup runs `large-v3-turbo`, which OpenAI documents as offering "faster
+  transcription speed with a minimal degradation in accuracy" versus large-v3
+  ([official Whisper README](https://github.com/openai/whisper#available-models-and-languages)).
+- Apple publishes no word-error-rate figures for macOS Dictation, so there is
+  no official head-to-head benchmark — but Apple Dictation is absent from ASR
+  leaderboards entirely, while Whisper large-v3 sits at the top of them.
+- On top of raw accuracy, `config.json` sets a `whisperPrompt` biased toward
+  programming vocabulary and project names (TypeScript, Shopify, Drizzle,
+  Xilften, Netflix, ...), which steers transcription toward the terms you
+  actually dictate — something Apple Dictation has no equivalent for.
+
 ## What's in this folder
 
 - `config.json` — open-wispr config: double-press on left/right Control,
