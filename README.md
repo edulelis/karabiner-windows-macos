@@ -48,3 +48,14 @@ Backspace: Delete text while editing; otherwise go to parent folder (Finder)
 ```
 
 Without that rule, Finder keeps its default macOS Backspace behavior and you will not get the Windows-style "go to parent folder" mapping.
+
+## Dictation (open-wispr fork)
+
+Apple dictation replaced by [open-wispr](https://github.com/human37/open-wispr), a free, local, on-device whisper.cpp dictation app, patched with a native double-press Control gesture:
+
+- **Double-tap Control** starts recording
+- **Single Control press** stops recording and inserts the text
+- `Ctrl+<letter>` shortcuts are never affected (the patch uses an observer-only event monitor)
+
+Everything lives in [`open-wispr/`](open-wispr/) — config, the double-press patch, and a script that disables Apple dictation so the two never fire together. See [`open-wispr/README.md`](open-wispr/README.md) for install and revert steps.
+

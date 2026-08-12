@@ -1,0 +1,12 @@
+{
+  "hotkeys": [
+    { "keyCode": 59, "modifiers": [], "doublePress": true },
+    { "keyCode": 62, "modifiers": [], "doublePress": true }
+  ],
+  "modelSize": "large-v3-turbo",
+  "language": "en",
+  "spokenPunctuation": false,
+  "whisperPrompt": "Transcribe programming and technical speech accurately. Common terms: TypeScript, JavaScript, Shopify, React, Node.js, NestJS, Fastify, PostgreSQL, Drizzle, Playwright, Rust, WebAssembly, Docker, Caddy, GraphQL, OAuth, webhooks, Vite, Jest, Kubernetes, Stripe, AWS, Xilften, Netflix, WhatsApp, GitHub, ESLint, npm, JSON, REST API.",
+  "maxRecordings": 0,
+  "toggleMode": false
+}

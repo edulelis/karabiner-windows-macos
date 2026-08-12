@@ -28,7 +28,7 @@
                         ]
                     },
                     {
-                        "description": "Mission Control: Application Windows on ⌘F3",
+                        "description": "Mission Control: Application Windows on \u2318F3",
                         "enabled": false,
                         "manipulators": [
                             {
@@ -58,7 +58,7 @@
                         ]
                     },
                     {
-                        "description": "Mission Control: Desktop on ⌥F3",
+                        "description": "Mission Control: Desktop on \u2325F3",
                         "enabled": false,
                         "manipulators": [
                             {
@@ -2631,7 +2631,7 @@
                                 },
                                 "to": [
                                     {
-                                        "shell_command": "/bin/zsh -lc '$HOME/.config/karabiner/bin/finder_backspace'"
+                                        "shell_command": "/Users/eduardo/.config/karabiner/bin/finder_backspace"
                                     }
                                 ],
                                 "conditions": [
@@ -2646,7 +2646,7 @@
                         ]
                     },
                     {
-                        "description": "Delete: Move to Trash (Finder, not editing)",
+                        "description": "Delete: Move selected Finder item to Trash (preserve text editing)",
                         "manipulators": [
                             {
                                 "type": "basic",
@@ -2654,7 +2654,7 @@
                                     "key_code": "delete_forward",
                                     "modifiers": {
                                         "optional": [
-                                            "any"
+                                            "caps_lock"
                                         ]
                                     }
                                 },
@@ -2674,9 +2674,9 @@
                                         ]
                                     },
                                     {
-                                        "type": "variable_if",
-                                        "name": "onedit",
-                                        "value": 0
+                                        "type": "variable_unless",
+                                        "name": "accessibility.focused_ui_element.role_string",
+                                        "value": "AXTextField"
                                     }
                                 ]
                             }
@@ -3299,7 +3299,7 @@
                                 },
                                 "to": [
                                     {
-                                        "shell_command": "/bin/zsh -lc '$HOME/.config/karabiner/bin/finder_backspace --prompt'"
+                                        "shell_command": "/Users/eduardo/.config/karabiner/bin/finder_backspace --prompt"
                                     }
                                 ]
                             }

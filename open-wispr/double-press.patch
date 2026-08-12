@@ -1,0 +1,262 @@
+diff --git a/Sources/OpenWisprLib/AppDelegate.swift b/Sources/OpenWisprLib/AppDelegate.swift
+index 33b809e..cc9079e 100644
+--- a/Sources/OpenWisprLib/AppDelegate.swift
++++ b/Sources/OpenWisprLib/AppDelegate.swift
+@@ -134,7 +134,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+         for hk in config.hotkeys {
+             let manager = HotkeyManager(
+                 keyCode: hk.keyCode,
+-                modifiers: hk.modifierFlags
++                modifiers: hk.modifierFlags,
++                doublePress: hk.doublePress ?? false
+             )
+             manager.start(
+                 onKeyDown: { [weak self] in
+@@ -142,6 +143,12 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+                 },
+                 onKeyUp: { [weak self] in
+                     self?.handleKeyUp()
++                },
++                onDoublePress: { [weak self] in
++                    self?.handleDoublePress()
++                },
++                onSinglePressDown: { [weak self] in
++                    self?.handleSinglePressStop()
+                 }
+             )
+             hotkeyManagers.append(manager)
+@@ -196,11 +203,14 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+         for hk in config.hotkeys {
+             let manager = HotkeyManager(
+                 keyCode: hk.keyCode,
+-                modifiers: hk.modifierFlags
++                modifiers: hk.modifierFlags,
++                doublePress: hk.doublePress ?? false
+             )
+             manager.start(
+                 onKeyDown: { [weak self] in self?.handleKeyDown() },
+-                onKeyUp: { [weak self] in self?.handleKeyUp() }
++                onKeyUp: { [weak self] in self?.handleKeyUp() },
++                onDoublePress: { [weak self] in self?.handleDoublePress() },
++                onSinglePressDown: { [weak self] in self?.handleSinglePressStop() }
+             )
+             hotkeyManagers.append(manager)
+         }
+@@ -271,6 +281,36 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+         }
+     }
+ 
++    private func handleDoublePress() {
++        guard isReady else { return }
++
++        switch recordingLifecycle.keyDown(toggleMode: true) {
++        case .startRecording:
++            print("Double-press: start recording")
++            handleRecordingStart()
++        case .stopRecording:
++            print("Double-press: stop recording")
++            handleRecordingStop()
++        default:
++            break
++        }
++    }
++
++    private func handleSinglePressStop() {
++        guard isReady else { return }
++
++        if recordingLifecycle.isRecording {
++            print("Single-press: stop recording")
++            handleRecordingStop()
++        }
++    }
++
++    private func setHotkeyMode(_ mode: HotkeyPressMode) {
++        for m in hotkeyManagers {
++            m.mode = mode
++        }
++    }
++
+     private func handleRecordingStart() {
+         statusBar.state = .recording
+         do {
+@@ -282,15 +322,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+             }
+             try recorder.startRecording(to: outputURL)
+             currentRecordingURL = outputURL
++            setHotkeyMode(.singlePress)
+         } catch {
+             print("Error: \(error.localizedDescription)")
+             recordingLifecycle.recordingStartFailed()
+             currentRecordingURL = nil
+             statusBar.state = .idle
++            setHotkeyMode(.doublePress)
+         }
+     }
+ 
+     private func handleRecordingStop() {
++        setHotkeyMode(.doublePress)
+         guard let audioURL = recorder.stopRecording() else {
+             RecordingCancellation.discardTrackedPartialRecording(&currentRecordingURL)
+             statusBar.state = .idle
+diff --git a/Sources/OpenWisprLib/Config.swift b/Sources/OpenWisprLib/Config.swift
+index 479ffee..1ed1342 100644
+--- a/Sources/OpenWisprLib/Config.swift
++++ b/Sources/OpenWisprLib/Config.swift
+@@ -332,10 +332,12 @@ public struct FlexBool: Codable {
+ public struct HotkeyConfig: Codable, Equatable {
+     public var keyCode: UInt16
+     public var modifiers: [String]
++    public var doublePress: Bool?
+ 
+-    public init(keyCode: UInt16, modifiers: [String]) {
++    public init(keyCode: UInt16, modifiers: [String], doublePress: Bool? = nil) {
+         self.keyCode = keyCode
+         self.modifiers = modifiers
++        self.doublePress = doublePress
+     }
+ 
+     public var modifierFlags: UInt64 {
+diff --git a/Sources/OpenWisprLib/HotkeyManager.swift b/Sources/OpenWisprLib/HotkeyManager.swift
+index 1e31b3a..c99ad0c 100644
+--- a/Sources/OpenWisprLib/HotkeyManager.swift
++++ b/Sources/OpenWisprLib/HotkeyManager.swift
+@@ -1,22 +1,44 @@
+ import AppKit
+ import Foundation
+ 
++enum HotkeyPressMode {
++    /// Idle: only a double press fires (single presses are ignored).
++    case doublePress
++    /// Recording: a single press-down fires immediately (to stop recording).
++    case singlePress
++}
++
+ class HotkeyManager {
+     private var globalMonitor: Any?
+     private let keyCode: UInt16
+     private let requiredModifiers: UInt64
++    private let doublePressEnabled: Bool
++    var mode: HotkeyPressMode = .doublePress
+     private var onKeyDown: (() -> Void)?
+     private var onKeyUp: (() -> Void)?
++    private var onDoublePress: (() -> Void)?
++    private var onSinglePressDown: (() -> Void)?
+     private var modifierPressed = false
+ 
+-    init(keyCode: UInt16, modifiers: UInt64 = 0) {
++    // Double-press state (modifier keys)
++    private var dpWindowStart: TimeInterval = 0
++    private var dpSawUp = false
++    private var dpCancelled = false
++
++    init(keyCode: UInt16, modifiers: UInt64 = 0, doublePress: Bool = false) {
+         self.keyCode = keyCode
+         self.requiredModifiers = modifiers
++        self.doublePressEnabled = doublePress
+     }
+ 
+-    func start(onKeyDown: @escaping () -> Void, onKeyUp: @escaping () -> Void) {
++    func start(onKeyDown: @escaping () -> Void,
++               onKeyUp: @escaping () -> Void,
++               onDoublePress: (() -> Void)? = nil,
++               onSinglePressDown: (() -> Void)? = nil) {
+         self.onKeyDown = onKeyDown
+         self.onKeyUp = onKeyUp
++        self.onDoublePress = onDoublePress
++        self.onSinglePressDown = onSinglePressDown
+ 
+         let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
+ 
+@@ -33,6 +55,15 @@ class HotkeyManager {
+     }
+ 
+     private func handleEvent(_ event: NSEvent) {
++        if doublePressEnabled && isModifierOnlyKey(keyCode) {
++            if mode == .singlePress {
++                handleSinglePressEvent(event)
++            } else {
++                handleDoublePressEvent(event)
++            }
++            return
++        }
++
+         if isModifierOnlyKey(keyCode) {
+             guard event.type == .flagsChanged else { return }
+             guard event.keyCode == keyCode else { return }
+@@ -62,6 +93,76 @@ class HotkeyManager {
+         }
+     }
+ 
++    /// In single-press mode (recording): fire immediately on modifier press-down.
++    private func handleSinglePressEvent(_ event: NSEvent) {
++        guard event.type == .flagsChanged, event.keyCode == keyCode else { return }
++
++        let isDown: Bool
++        if requiredModifiers != 0 {
++            let currentMods = UInt64(event.modifierFlags.rawValue) & 0x00FF0000
++            isDown = currentMods & requiredModifiers == requiredModifiers
++        } else {
++            isDown = !modifierPressed
++        }
++
++        if isDown {
++            modifierPressed = true
++            onSinglePressDown?()
++        } else {
++            modifierPressed = false
++        }
++    }
++
++    /// Double-press detection for modifier-only keys.
++    /// A double press is: down, up, down again within 400ms, with no other
++    /// key (or modifier) pressed in between. Single presses and chords
++    /// (e.g. Ctrl+C) never fire.
++    private func handleDoublePressEvent(_ event: NSEvent) {
++        let now = ProcessInfo.processInfo.systemUptime
++
++        if event.type == .flagsChanged && event.keyCode == keyCode {
++            let isDown: Bool
++            if requiredModifiers != 0 {
++                let currentMods = UInt64(event.modifierFlags.rawValue) & 0x00FF0000
++                isDown = currentMods & requiredModifiers == requiredModifiers
++            } else {
++                isDown = !modifierPressed
++            }
++
++            if isDown {
++                if dpWindowStart > 0,
++                   now - dpWindowStart <= 0.4,
++                   dpSawUp,
++                   !dpCancelled {
++                    // Double press detected
++                    dpWindowStart = 0
++                    dpSawUp = false
++                    dpCancelled = false
++                    modifierPressed = true
++                    onDoublePress?()
++                } else {
++                    dpWindowStart = now
++                    dpSawUp = false
++                    dpCancelled = false
++                    modifierPressed = true
++                }
++            } else {
++                modifierPressed = false
++                if dpWindowStart > 0, now - dpWindowStart <= 0.4 {
++                    dpSawUp = true
++                }
++            }
++        } else if dpWindowStart > 0, now - dpWindowStart <= 0.4 {
++            // Another key or modifier during the window: it's a chord, cancel.
++            dpCancelled = true
++        } else if dpWindowStart > 0 {
++            // Window expired
++            dpWindowStart = 0
++            dpSawUp = false
++            dpCancelled = false
++        }
++    }
++
+     private func isModifierOnlyKey(_ code: UInt16) -> Bool {
+         return [54, 55, 56, 58, 59, 60, 61, 62, 63].contains(code)
+     }
