@@ -44,7 +44,7 @@ With the Finder Backspace rule still enabled but the helper not approved, plain 
 To skip the helper cleanly, remove or disable this rule from `karabiner/karabiner.json`:
 
 ```text
-Backspace: Delete text while editing; otherwise go to parent folder (Finder)
+Backspace: Native text delete while editing; otherwise go to parent folder (Finder)
 ```
 
 Without that rule, Finder keeps its default macOS Backspace behavior and you will not get the Windows-style "go to parent folder" mapping.

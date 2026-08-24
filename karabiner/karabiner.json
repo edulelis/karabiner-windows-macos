@@ -2598,32 +2598,8 @@
                         ]
                     },
                     {
-                        "description": "Backspace: Delete text while editing; otherwise go to parent folder (Finder)",
+                        "description": "Backspace: Native text delete while editing; otherwise go to parent folder (Finder)",
                         "manipulators": [
-                            {
-                                "type": "basic",
-                                "from": {
-                                    "key_code": "delete_or_backspace"
-                                },
-                                "to": [
-                                    {
-                                        "key_code": "delete_or_backspace"
-                                    }
-                                ],
-                                "conditions": [
-                                    {
-                                        "type": "frontmost_application_if",
-                                        "bundle_identifiers": [
-                                            "^com.apple.finder"
-                                        ]
-                                    },
-                                    {
-                                        "type": "variable_if",
-                                        "name": "onedit",
-                                        "value": 1
-                                    }
-                                ]
-                            },
                             {
                                 "type": "basic",
                                 "from": {
@@ -2640,6 +2616,11 @@
                                         "bundle_identifiers": [
                                             "^com.apple.finder"
                                         ]
+                                    },
+                                    {
+                                        "type": "variable_unless",
+                                        "name": "onedit",
+                                        "value": 1
                                     }
                                 ]
                             }
