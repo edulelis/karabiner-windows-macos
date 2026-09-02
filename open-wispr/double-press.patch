@@ -117,17 +117,17 @@ index 479ffee..1ed1342 100644
  
      public var modifierFlags: UInt64 {
 diff --git a/Sources/OpenWisprLib/HotkeyManager.swift b/Sources/OpenWisprLib/HotkeyManager.swift
-index 1e31b3a..c99ad0c 100644
+index 1e31b3a..0f63e7e 100644
 --- a/Sources/OpenWisprLib/HotkeyManager.swift
 +++ b/Sources/OpenWisprLib/HotkeyManager.swift
-@@ -1,22 +1,44 @@
+@@ -1,22 +1,75 @@
  import AppKit
  import Foundation
  
 +enum HotkeyPressMode {
 +    /// Idle: only a double press fires (single presses are ignored).
 +    case doublePress
-+    /// Recording: a single press-down fires immediately (to stop recording).
++    /// Recording: a single, blank press fires (to stop recording).
 +    case singlePress
 +}
 +
@@ -136,7 +136,19 @@ index 1e31b3a..c99ad0c 100644
      private let keyCode: UInt16
      private let requiredModifiers: UInt64
 +    private let doublePressEnabled: Bool
-+    var mode: HotkeyPressMode = .doublePress
++
++    var mode: HotkeyPressMode = .doublePress {
++        didSet {
++            if mode != oldValue {
++                modeChangedAt = ProcessInfo.processInfo.systemUptime
++                startPending = false
++                stopPending = false
++                pendingStartCancelled = false
++                pendingStopCancelled = false
++            }
++        }
++    }
++
      private var onKeyDown: (() -> Void)?
      private var onKeyUp: (() -> Void)?
 +    private var onDoublePress: (() -> Void)?
@@ -144,10 +156,29 @@ index 1e31b3a..c99ad0c 100644
      private var modifierPressed = false
  
 -    init(keyCode: UInt16, modifiers: UInt64 = 0) {
-+    // Double-press state (modifier keys)
-+    private var dpWindowStart: TimeInterval = 0
-+    private var dpSawUp = false
-+    private var dpCancelled = false
++    // Tap history for this key (uptime seconds of real down/up events).
++    private var lastDownAt: TimeInterval = 0
++    private var lastUpAt: TimeInterval = 0
++    private var modeChangedAt: TimeInterval = 0
++
++    // --- double-press (start) detection ---
++    // Two taps = down, up, down again. The window is measured from the first
++    // RELEASE (up -> down gap <= dpGap), not from the first press, so
++    // deliberate taps whose press-to-press span exceeds 400 ms still register.
++    private let dpGap: TimeInterval = 0.4            // release -> second press limit
++    private let dpNoUpFallback: TimeInterval = 0.15  // second down this close to the first down fires even if the OS never delivered the up (merged ultra-fast taps)
++    private var startPending = false                 // second tap seen; awaiting chord-confirm grace
++    private var pendingStartCancelled = false
++
++    // --- single-press stop (blank press) detection ---
++    // Recording stops only on a BLANK press: ctrl down, no other key between
++    // down and up. Chords (ctrl+C, ctrl+A, ctrl+shift+C, ...) never stop it.
++    // The stop fires after a short post-release grace so chord keys delivered
++    // slightly late still cancel it.
++    private let stopGrace: TimeInterval = 0.09       // post-release chord-confirm window
++    private let quietGap: TimeInterval = 0.3         // ignore presses right after a mode change (buzz tails)
++    private var stopPending = false                  // armed on ctrl down while recording
++    private var pendingStopCancelled = false
 +
 +    init(keyCode: UInt16, modifiers: UInt64 = 0, doublePress: Bool = false) {
          self.keyCode = keyCode
@@ -167,7 +198,7 @@ index 1e31b3a..c99ad0c 100644
  
          let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
  
-@@ -33,6 +55,15 @@ class HotkeyManager {
+@@ -33,6 +86,15 @@ class HotkeyManager {
      }
  
      private func handleEvent(_ event: NSEvent) {
@@ -183,77 +214,115 @@ index 1e31b3a..c99ad0c 100644
          if isModifierOnlyKey(keyCode) {
              guard event.type == .flagsChanged else { return }
              guard event.keyCode == keyCode else { return }
-@@ -62,6 +93,76 @@ class HotkeyManager {
+@@ -62,6 +124,114 @@ class HotkeyManager {
          }
      }
  
-+    /// In single-press mode (recording): fire immediately on modifier press-down.
-+    private func handleSinglePressEvent(_ event: NSEvent) {
-+        guard event.type == .flagsChanged, event.keyCode == keyCode else { return }
++    // MARK: - Recording: stop on a BLANK press only (never on chords)
 +
-+        let isDown: Bool
-+        if requiredModifiers != 0 {
-+            let currentMods = UInt64(event.modifierFlags.rawValue) & 0x00FF0000
-+            isDown = currentMods & requiredModifiers == requiredModifiers
-+        } else {
-+            isDown = !modifierPressed
++    private func handleSinglePressEvent(_ event: NSEvent) {
++        guard event.type == .flagsChanged, event.keyCode == keyCode else {
++            // Any other key activity while a stop press is pending means this
++            // is a chord (ctrl+C / ctrl+shift+C / ...): cancel the stop.
++            if stopPending {
++                stopPending = false
++                pendingStopCancelled = true
++            }
++            return
 +        }
++
++        let now = ProcessInfo.processInfo.systemUptime
++        let isDown = !modifierPressed
 +
 +        if isDown {
 +            modifierPressed = true
-+            onSinglePressDown?()
++            lastDownAt = now
++
++            // Multi-tap buzz tails right after the recording started must not
++            // stop the recording that just began: require quiet since the last
++            // release AND since the mode change.
++            let quietSinceUp = lastUpAt > 0 ? now - lastUpAt : .infinity
++            let quietSinceMode = now - modeChangedAt
++            guard quietSinceUp >= quietGap || quietSinceMode >= quietGap else {
++                return
++            }
++
++            stopPending = true
++            pendingStopCancelled = false
 +        } else {
 +            modifierPressed = false
++            lastUpAt = now
++
++            if stopPending {
++                // Blank press. Confirm after a short grace: if a chord key is
++                // delivered right after the release (Karabiner reordering), it
++                // cancels in time.
++                let deadline = DispatchTime.now() + stopGrace
++                DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
++                    guard let self = self else { return }
++                    if self.stopPending && !self.pendingStopCancelled {
++                        self.stopPending = false
++                        self.onSinglePressDown?()
++                    }
++                }
++            }
 +        }
 +    }
 +
-+    /// Double-press detection for modifier-only keys.
-+    /// A double press is: down, up, down again within 400ms, with no other
-+    /// key (or modifier) pressed in between. Single presses and chords
-+    /// (e.g. Ctrl+C) never fire.
++    // MARK: - Idle: start on two taps inside the window
++
 +    private func handleDoublePressEvent(_ event: NSEvent) {
++        guard event.type == .flagsChanged, event.keyCode == keyCode else {
++            // A chord key or stray key while a start is pending cancels it
++            // (e.g. ctrl tap + ctrl+C right after the second tap).
++            if startPending && (event.type == .keyDown || event.type == .flagsChanged) {
++                startPending = false
++                pendingStartCancelled = true
++            }
++            return
++        }
++
 +        let now = ProcessInfo.processInfo.systemUptime
++        let isDown = !modifierPressed
 +
-+        if event.type == .flagsChanged && event.keyCode == keyCode {
-+            let isDown: Bool
-+            if requiredModifiers != 0 {
-+                let currentMods = UInt64(event.modifierFlags.rawValue) & 0x00FF0000
-+                isDown = currentMods & requiredModifiers == requiredModifiers
-+            } else {
-+                isDown = !modifierPressed
++        if isDown {
++            modifierPressed = true
++
++            if startPending {
++                // Third tap of a buzz while a start is pending: ignore it and
++                // let the pending start fire on its grace timer.
++                return
 +            }
 +
-+            if isDown {
-+                if dpWindowStart > 0,
-+                   now - dpWindowStart <= 0.4,
-+                   dpSawUp,
-+                   !dpCancelled {
-+                    // Double press detected
-+                    dpWindowStart = 0
-+                    dpSawUp = false
-+                    dpCancelled = false
-+                    modifierPressed = true
-+                    onDoublePress?()
-+                } else {
-+                    dpWindowStart = now
-+                    dpSawUp = false
-+                    dpCancelled = false
-+                    modifierPressed = true
-+                }
-+            } else {
-+                modifierPressed = false
-+                if dpWindowStart > 0, now - dpWindowStart <= 0.4 {
-+                    dpSawUp = true
++            // Evaluate against the PREVIOUS tap before recording this one.
++            let gapFromUp = lastUpAt > 0 ? now - lastUpAt : .infinity
++            let sawRelease = lastUpAt > lastDownAt  // the key was fully released after the previous press
++
++            let qualifies =
++                (sawRelease && gapFromUp <= dpGap) ||   // normal double tap (window from release)
++                (lastDownAt > 0 &&                      // up was merged/dropped by the OS:
++                 now - lastDownAt <= dpNoUpFallback)    // second down came ~immediately after the first
++
++            let afterQuiet = now - modeChangedAt >= quietGap
++            lastDownAt = now
++
++            if qualifies && afterQuiet {
++                startPending = true
++                pendingStartCancelled = false
++                // Chord-confirm grace: ctrl+C pressed right after the second
++                // tap cancels this before recording starts.
++                let deadline = DispatchTime.now() + stopGrace
++                DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
++                    guard let self = self else { return }
++                    if self.startPending && !self.pendingStartCancelled {
++                        self.startPending = false
++                        self.onDoublePress?()
++                    }
 +                }
 +            }
-+        } else if dpWindowStart > 0, now - dpWindowStart <= 0.4 {
-+            // Another key or modifier during the window: it's a chord, cancel.
-+            dpCancelled = true
-+        } else if dpWindowStart > 0 {
-+            // Window expired
-+            dpWindowStart = 0
-+            dpSawUp = false
-+            dpCancelled = false
++        } else {
++            modifierPressed = false
++            lastUpAt = now
 +        }
 +    }
 +
