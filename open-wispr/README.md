@@ -119,8 +119,10 @@ brew reinstall open-wispr
   *release* (release → second press ≤ 400ms), so deliberate taps whose
   press-to-press span exceeds 400ms still register; a second press within
   150ms of the first fires even when the OS merges an ultra-fast release.
-  Right after starting or stopping, presses inside a 300ms quiet window are
-  ignored so fast multi-tap "buzzes" can't stop-then-restart the recording.
+  Tap history is cleared on every start/stop, so a stop tap never pairs with
+  the restart taps and recording can restart immediately with the same
+  rhythm. Presses inside a 300ms quiet window after *starting* are ignored so
+  fast multi-tap "buzzes" can't stop the recording right after it began.
   Residual OS limit: if two taps are so fast that macOS merges them into one
   continuous press, no app sees two taps at all — identical to Apple's own
   "Press Control Twice" behavior.
