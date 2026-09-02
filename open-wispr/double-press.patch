@@ -1,5 +1,5 @@
 diff --git a/Sources/OpenWisprLib/AppDelegate.swift b/Sources/OpenWisprLib/AppDelegate.swift
-index 33b809e..cc9079e 100644
+index 33b809e..3fc43ad 100644
 --- a/Sources/OpenWisprLib/AppDelegate.swift
 +++ b/Sources/OpenWisprLib/AppDelegate.swift
 @@ -134,7 +134,8 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
@@ -42,7 +42,7 @@ index 33b809e..cc9079e 100644
              )
              hotkeyManagers.append(manager)
          }
-@@ -271,6 +281,36 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+@@ -271,6 +281,45 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
          }
      }
  
@@ -63,10 +63,19 @@ index 33b809e..cc9079e 100644
 +
 +    private func handleSinglePressStop() {
 +        guard isReady else { return }
++        guard recordingLifecycle.isRecording else { return }
 +
-+        if recordingLifecycle.isRecording {
++        // Route through the lifecycle toggle (same as handleDoublePress) so
++        // its isRecording state stays in sync. Bypassing it (old code) left
++        // the lifecycle believing it was still recording after a single-press
++        // stop, so the next double-press was eaten as a "stop" instead of
++        // starting a new recording.
++        switch recordingLifecycle.keyDown(toggleMode: true) {
++        case .stopRecording:
 +            print("Single-press: stop recording")
 +            handleRecordingStop()
++        default:
++            break
 +        }
 +    }
 +
@@ -79,7 +88,7 @@ index 33b809e..cc9079e 100644
      private func handleRecordingStart() {
          statusBar.state = .recording
          do {
-@@ -282,15 +322,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
+@@ -282,15 +331,18 @@ public class AppDelegate: NSObject, NSApplicationDelegate {
              }
              try recorder.startRecording(to: outputURL)
              currentRecordingURL = outputURL
