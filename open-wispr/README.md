@@ -7,7 +7,7 @@ Apple's built-in dictation with a Control-key gesture.
 
 | State | Gesture | Effect |
 |-------|---------|--------|
-| Idle | Double-tap Control (left or right, release-to-press gap ≤ 400ms, no key in between) | Start recording |
+| Idle | Double-tap Control (left or right, release-to-press gap ≤ 190ms, no key in between) | Start recording |
 | Recording | Blank Control press (down + up with no other key) | Stop recording + insert text |
 
 - `Ctrl+<letter>` chords never trigger it — and since v2 they also never stop
@@ -98,6 +98,11 @@ tail -f /opt/homebrew/var/log/open-wispr.log
 Double-tap Control → `Double-press: start recording`.
 Single tap while recording → `Single-press: stop recording`.
 
+After applying the patch in the source checkout, run the deterministic hotkey
+regressions with `swift test --disable-sandbox --filter HotkeyManagerTests`.
+They cover rapid start/stop/restart, both Control keys, and chord cancellation
+without recording audio or sending keyboard input to other apps.
+
 ## Revert to stock open-wispr
 
 ```sh
@@ -109,20 +114,21 @@ brew reinstall open-wispr
 ## Notes
 
 - The patch base is open-wispr commit `7ab4e62e8f182f3ecc2116e1094a1eb4416a248f`
-  (v0.43.0). If upstream moves, cherry-pick the three touched files by hand —
-  the edits are small (`HotkeyManager.swift`, `Config.swift`,
-  `AppDelegate.swift`).
+  (v0.43.0). If upstream moves, port the three source files
+  (`HotkeyManager.swift`, `Config.swift`, `AppDelegate.swift`) and the included
+  `HotkeyManagerTests.swift` regressions together.
 - Double-press works with no extra key required: open-wispr's event monitor is
   a pure observer (NSEvent global monitor), so it can never intercept or
   modify keystrokes — your Karabiner mappings keep working.
 - Timing semantics (v2): the double-press window is measured from the first
-  *release* (release → second press ≤ 400ms), so deliberate taps whose
-  press-to-press span exceeds 400ms still register; a second press within
+  *release* (release → second press ≤ 190ms), so deliberate taps whose
+  press-to-press span exceeds 190ms still register; a second press within
   150ms of the first fires even when the OS merges an ultra-fast release.
   Tap history is cleared on every start/stop, so a stop tap never pairs with
   the restart taps and recording can restart immediately with the same
-  rhythm. Presses inside a 300ms quiet window after *starting* are ignored so
-  fast multi-tap "buzzes" can't stop the recording right after it began.
+  rhythm. Once recording starts, the next blank Control tap stops it even
+  immediately; there is no 300ms lockout. Releasing the second start tap alone
+  does not stop recording. The 90ms chord-confirm grace still applies.
   Residual OS limit: if two taps are so fast that macOS merges them into one
   continuous press, no app sees two taps at all — identical to Apple's own
   "Press Control Twice" behavior.

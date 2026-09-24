@@ -126,10 +126,10 @@ index 479ffee..1ed1342 100644
  
      public var modifierFlags: UInt64 {
 diff --git a/Sources/OpenWisprLib/HotkeyManager.swift b/Sources/OpenWisprLib/HotkeyManager.swift
-index 1e31b3a..639fa52 100644
+index 1e31b3a..9ce62e7 100644
 --- a/Sources/OpenWisprLib/HotkeyManager.swift
 +++ b/Sources/OpenWisprLib/HotkeyManager.swift
-@@ -1,22 +1,81 @@
+@@ -1,22 +1,86 @@
  import AppKit
  import Foundation
  
@@ -145,11 +145,12 @@ index 1e31b3a..639fa52 100644
      private let keyCode: UInt16
      private let requiredModifiers: UInt64
 +    private let doublePressEnabled: Bool
++    private let now: () -> TimeInterval
++    private let schedule: (TimeInterval, @escaping () -> Void) -> Void
 +
 +    var mode: HotkeyPressMode = .doublePress {
 +        didSet {
 +            if mode != oldValue {
-+                modeChangedAt = ProcessInfo.processInfo.systemUptime
 +                startPending = false
 +                stopPending = false
 +                pendingStartCancelled = false
@@ -174,13 +175,12 @@ index 1e31b3a..639fa52 100644
 +    // Tap history for this key (uptime seconds of real down/up events).
 +    private var lastDownAt: TimeInterval = 0
 +    private var lastUpAt: TimeInterval = 0
-+    private var modeChangedAt: TimeInterval = 0
 +
 +    // --- double-press (start) detection ---
 +    // Two taps = down, up, down again. The window is measured from the first
 +    // RELEASE (up -> down gap <= dpGap), not from the first press, so
-+    // deliberate taps whose press-to-press span exceeds 400 ms still register.
-+    private let dpGap: TimeInterval = 0.4            // release -> second press limit
++    // deliberate taps whose press-to-press span exceeds 190 ms still register.
++    private let dpGap: TimeInterval = 0.19           // release -> second press limit
 +    private let dpNoUpFallback: TimeInterval = 0.15  // second down this close to the first down fires even if the OS never delivered the up (merged ultra-fast taps)
 +    private var startPending = false                 // second tap seen; awaiting chord-confirm grace
 +    private var pendingStartCancelled = false
@@ -191,14 +191,19 @@ index 1e31b3a..639fa52 100644
 +    // The stop fires after a short post-release grace so chord keys delivered
 +    // slightly late still cancel it.
 +    private let stopGrace: TimeInterval = 0.09       // post-release chord-confirm window
-+    private let quietGap: TimeInterval = 0.3         // ignore presses right after a mode change (buzz tails)
 +    private var stopPending = false                  // armed on ctrl down while recording
 +    private var pendingStopCancelled = false
 +
-+    init(keyCode: UInt16, modifiers: UInt64 = 0, doublePress: Bool = false) {
++    init(keyCode: UInt16, modifiers: UInt64 = 0, doublePress: Bool = false,
++         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
++         schedule: @escaping (TimeInterval, @escaping () -> Void) -> Void = { delay, action in
++             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: action)
++         }) {
          self.keyCode = keyCode
          self.requiredModifiers = modifiers
 +        self.doublePressEnabled = doublePress
++        self.now = now
++        self.schedule = schedule
      }
  
 -    func start(onKeyDown: @escaping () -> Void, onKeyUp: @escaping () -> Void) {
@@ -213,10 +218,12 @@ index 1e31b3a..639fa52 100644
  
          let mask: NSEvent.EventTypeMask = [.keyDown, .keyUp, .flagsChanged]
  
-@@ -33,6 +92,15 @@ class HotkeyManager {
+@@ -32,7 +96,16 @@ class HotkeyManager {
+         globalMonitor = nil
      }
  
-     private func handleEvent(_ event: NSEvent) {
+-    private func handleEvent(_ event: NSEvent) {
++    func handleEvent(_ event: NSEvent) {
 +        if doublePressEnabled && isModifierOnlyKey(keyCode) {
 +            if mode == .singlePress {
 +                handleSinglePressEvent(event)
@@ -229,7 +236,7 @@ index 1e31b3a..639fa52 100644
          if isModifierOnlyKey(keyCode) {
              guard event.type == .flagsChanged else { return }
              guard event.keyCode == keyCode else { return }
-@@ -62,6 +130,112 @@ class HotkeyManager {
+@@ -62,6 +135,104 @@ class HotkeyManager {
          }
      }
  
@@ -246,21 +253,15 @@ index 1e31b3a..639fa52 100644
 +            return
 +        }
 +
-+        let now = ProcessInfo.processInfo.systemUptime
++        let now = now()
 +        let isDown = !modifierPressed
 +
 +        if isDown {
 +            modifierPressed = true
 +            lastDownAt = now
 +
-+            // Multi-tap buzz tails right after the recording started must not
-+            // stop the recording that just began: require quiet since the mode
-+            // change (tap history is cleared on mode changes, so the last
-+            // release carries no signal here).
-+            guard now - modeChangedAt >= quietGap else {
-+                return
-+            }
-+
++            // Once recording starts, the next blank tap must stop it, even
++            // immediately. The start tap's release alone cannot arm a stop.
 +            stopPending = true
 +            pendingStopCancelled = false
 +        } else {
@@ -271,8 +272,7 @@ index 1e31b3a..639fa52 100644
 +                // Blank press. Confirm after a short grace: if a chord key is
 +                // delivered right after the release (Karabiner reordering), it
 +                // cancels in time.
-+                let deadline = DispatchTime.now() + stopGrace
-+                DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
++                schedule(stopGrace) { [weak self] in
 +                    guard let self = self else { return }
 +                    if self.stopPending && !self.pendingStopCancelled {
 +                        self.stopPending = false
@@ -296,7 +296,7 @@ index 1e31b3a..639fa52 100644
 +            return
 +        }
 +
-+        let now = ProcessInfo.processInfo.systemUptime
++        let now = now()
 +        let isDown = !modifierPressed
 +
 +        if isDown {
@@ -324,8 +324,7 @@ index 1e31b3a..639fa52 100644
 +                pendingStartCancelled = false
 +                // Chord-confirm grace: ctrl+C pressed right after the second
 +                // tap cancels this before recording starts.
-+                let deadline = DispatchTime.now() + stopGrace
-+                DispatchQueue.main.asyncAfter(deadline: deadline) { [weak self] in
++                schedule(stopGrace) { [weak self] in
 +                    guard let self = self else { return }
 +                    if self.startPending && !self.pendingStartCancelled {
 +                        self.startPending = false
@@ -342,3 +341,224 @@ index 1e31b3a..639fa52 100644
      private func isModifierOnlyKey(_ code: UInt16) -> Bool {
          return [54, 55, 56, 58, 59, 60, 61, 62, 63].contains(code)
      }
+diff --git a/Tests/OpenWisprTests/HotkeyManagerTests.swift b/Tests/OpenWisprTests/HotkeyManagerTests.swift
+new file mode 100644
+--- /dev/null
++++ b/Tests/OpenWisprTests/HotkeyManagerTests.swift
+@@ -0,0 +1,216 @@
++import AppKit
++import XCTest
++@testable import OpenWisprLib
++
++final class HotkeyManagerTests: XCTestCase {
++    private final class VirtualScheduler {
++        var time: TimeInterval = 1
++        private var pending: [(due: TimeInterval, action: () -> Void)] = []
++
++        func schedule(_ delay: TimeInterval, _ action: @escaping () -> Void) {
++            pending.append((time + delay, action))
++        }
++
++        func advance(by interval: TimeInterval) {
++            time += interval
++            while let index = pending.firstIndex(where: { $0.due <= time }) {
++                let item = pending.remove(at: index)
++                item.action()
++            }
++        }
++    }
++
++    private func event(keyCode: UInt16, type: NSEvent.EventType,
++                       modifiers: NSEvent.ModifierFlags = []) -> NSEvent {
++        let result = NSEvent.keyEvent(
++            with: type,
++            location: .zero,
++            modifierFlags: modifiers,
++            timestamp: 0,
++            windowNumber: 0,
++            context: nil,
++            characters: "",
++            charactersIgnoringModifiers: "",
++            isARepeat: false,
++            keyCode: keyCode
++        )
++        XCTAssertNotNil(result)
++        return result!
++    }
++
++    private func tap(_ manager: HotkeyManager, keyCode: UInt16, clock: VirtualScheduler,
++                     modifiers: NSEvent.ModifierFlags = []) {
++        manager.handleEvent(event(keyCode: keyCode, type: .flagsChanged, modifiers: modifiers))
++        clock.advance(by: 0.01)
++        manager.handleEvent(event(keyCode: keyCode, type: .flagsChanged))
++    }
++
++    private func keyTap(_ manager: HotkeyManager, keyCode: UInt16,
++                        modifiers: NSEvent.ModifierFlags = []) {
++        manager.handleEvent(event(keyCode: keyCode, type: .keyDown, modifiers: modifiers))
++        manager.handleEvent(event(keyCode: keyCode, type: .keyUp, modifiers: modifiers))
++    }
++
++    func testImmediateBlankStopWithinQuietGapFiresOnceForLeftAndRightControl() {
++        for keyCode in [UInt16(59), UInt16(62)] {
++            let clock = VirtualScheduler()
++            var manager: HotkeyManager!
++            manager = HotkeyManager(keyCode: keyCode, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++            var stopCount = 0
++            var startCount = 0
++            manager.start(onKeyDown: {}, onKeyUp: {},
++                          onDoublePress: { [weak manager] in startCount += 1; manager?.mode = .singlePress },
++                          onSinglePressDown: { [weak manager] in stopCount += 1; manager?.mode = .doublePress })
++            manager.stop()
++            tap(manager, keyCode: keyCode, clock: clock, modifiers: .control)
++            clock.advance(by: 0.1)
++            tap(manager, keyCode: keyCode, clock: clock, modifiers: .control)
++            clock.advance(by: 0.09)
++            XCTAssertEqual(startCount, 1)
++            XCTAssertEqual(stopCount, 0)
++            tap(manager, keyCode: keyCode, clock: clock, modifiers: .control)
++            clock.advance(by: 0.1)
++            XCTAssertEqual(stopCount, 1, "control key code \(keyCode)")
++            clock.advance(by: 0.3)
++            XCTAssertEqual(stopCount, 1)
++        }
++    }
++
++    func testHeldSecondStartTapReleaseAfterStartDoesNotStop() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var stopCount = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: { [weak manager] in manager?.mode = .singlePress },
++                      onSinglePressDown: { stopCount += 1 })
++        manager.stop()
++
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged, modifiers: .control))
++        clock.advance(by: 0.01)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged))
++        clock.advance(by: 0.05)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged, modifiers: .control))
++        clock.advance(by: 0.09)
++        XCTAssertEqual(manager.mode, .singlePress)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged))
++        clock.advance(by: 0.1)
++
++        XCTAssertEqual(stopCount, 0)
++    }
++
++    func testDelayedBlankStopFiresOnce() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var stopCount = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: {}, onSinglePressDown: { stopCount += 1 })
++        manager.stop()
++        manager.mode = .singlePress
++        clock.advance(by: 0.4)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.09)
++        XCTAssertEqual(stopCount, 1)
++    }
++
++    func testCtrlCChordDoesNotStop() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var stopCount = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: {}, onSinglePressDown: { stopCount += 1 })
++        manager.stop(); manager.mode = .singlePress; clock.advance(by: 0.4)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged, modifiers: .control))
++        keyTap(manager, keyCode: 8, modifiers: .control)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged))
++        clock.advance(by: 0.09)
++        XCTAssertEqual(stopCount, 0)
++    }
++
++    func testDelayedChordWithinGraceCancelsStop() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var stopCount = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: {}, onSinglePressDown: { stopCount += 1 })
++        manager.stop(); manager.mode = .singlePress; clock.advance(by: 0.4)
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged, modifiers: .control))
++        manager.handleEvent(event(keyCode: 59, type: .flagsChanged))
++        clock.advance(by: 0.05)
++        keyTap(manager, keyCode: 8, modifiers: .control)
++        clock.advance(by: 0.04)
++        XCTAssertEqual(stopCount, 0)
++    }
++
++    func testOneIdleTapDoesNotStart() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var starts = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: { starts += 1 })
++        manager.stop()
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.2)
++        XCTAssertEqual(starts, 0)
++    }
++
++    func testReleaseGapOver190MillisecondsDoesNotStart() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var starts = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: { starts += 1 })
++        manager.stop()
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.2)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.2)
++        XCTAssertEqual(starts, 0)
++    }
++
++    func testNormalDoubleTapStarts() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var starts = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: { starts += 1 })
++        manager.stop()
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.1)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control)
++        clock.advance(by: 0.09)
++        XCTAssertEqual(starts, 1)
++    }
++
++    func testImmediateRestartNeedsTwoTapsAndCanRepeat() {
++        let clock = VirtualScheduler()
++        let manager = HotkeyManager(keyCode: 59, doublePress: true,
++                                    now: { clock.time },
++                                    schedule: { clock.schedule($0, $1) })
++        var starts = 0
++        var stops = 0
++        manager.start(onKeyDown: {}, onKeyUp: {}, onDoublePress: { [weak manager] in starts += 1; manager?.mode = .singlePress },
++                      onSinglePressDown: { [weak manager] in stops += 1; manager?.mode = .doublePress })
++        manager.stop()
++
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.1)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.09)
++        XCTAssertEqual(starts, 1)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.09)
++        XCTAssertEqual(stops, 1)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.1)
++        XCTAssertEqual(starts, 1)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.09)
++        XCTAssertEqual(starts, 2)
++        tap(manager, keyCode: 59, clock: clock, modifiers: .control); clock.advance(by: 0.1)
++        XCTAssertEqual(stops, 2)
++    }
++}
